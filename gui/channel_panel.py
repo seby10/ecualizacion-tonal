@@ -1,20 +1,22 @@
 """
-Control de un canal: un único slider centrado en 0, rango [-1, 1].
+Control de un canal: dos sliders (min_in, max_in) que definen la ventana
+de contrast stretching.
 
-El valor del slider se interpreta como la fuerza de la curva gamma:
-    s = -1 → γ = 4   (oscurece, expande sombras)
-    s =  0 → γ = 1   (identidad)
-    s = +1 → γ = 1/4 (aclara, expande luces)
+    s_min ∈ [0, 254]
+    s_max ∈ [1, 255]   (siempre > s_min — se hace clamp mutuo)
+
+LUT correspondiente: lut_stretch(s_min, s_max) — ver core.redistribution.
 """
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QSlider, QPushButton,
+)
 
 
 class ChannelSlider(QWidget):
-    """Slider centrado con etiqueta y valor, y botón de reset al centro."""
-    valueChanged = Signal(float)
-
-    _STEPS = 200  # resolución interna: -100..+100
+    """Dos sliders min_in/max_in con etiquetas y reset."""
+    valueChanged = Signal(int, int)  # (min_in, max_in)
 
     def __init__(self, channel_name: str, color: str, parent=None):
         super().__init__(parent)
@@ -27,48 +29,95 @@ class ChannelSlider(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(f"color: {color};")
 
-        self._slider = QSlider(Qt.Orientation.Horizontal)
-        self._slider.setRange(-self._STEPS // 2, self._STEPS // 2)
-        self._slider.setValue(0)
-        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._slider.setTickInterval(self._STEPS // 4)
-        self._slider.valueChanged.connect(self._on_change)
+        # min slider
+        self._min_slider = QSlider(Qt.Orientation.Horizontal)
+        self._min_slider.setRange(0, 255)
+        self._min_slider.setValue(0)
+        self._min_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._min_slider.setTickInterval(32)
+        self._min_slider.valueChanged.connect(self._on_min_change)
 
-        self._value_label = QLabel("0.00")
-        self._value_label.setMinimumWidth(45)
-        self._value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # max slider
+        self._max_slider = QSlider(Qt.Orientation.Horizontal)
+        self._max_slider.setRange(0, 255)
+        self._max_slider.setValue(255)
+        self._max_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._max_slider.setTickInterval(32)
+        self._max_slider.valueChanged.connect(self._on_max_change)
+
+        # value labels
+        self._min_value_label = QLabel("0")
+        self._max_value_label = QLabel("255")
+        for lbl in (self._min_value_label, self._max_value_label):
+            lbl.setMinimumWidth(34)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         reset_btn = QPushButton("↺")
         reset_btn.setFixedWidth(28)
-        reset_btn.setToolTip("Volver al centro (identidad)")
+        reset_btn.setToolTip("Restablecer ventana completa [0, 255]")
         reset_btn.clicked.connect(self.reset)
 
-        min_label = QLabel("−1.00")
-        max_label = QLabel("+1.00")
-        for lbl in (min_label, max_label):
+        min_tag = QLabel("min")
+        max_tag = QLabel("max")
+        for lbl in (min_tag, max_tag):
             lbl.setStyleSheet("color: #888;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setMinimumWidth(28)
 
-        row = QHBoxLayout()
-        row.addWidget(min_label)
-        row.addWidget(self._slider, 1)
-        row.addWidget(max_label)
-        row.addWidget(self._value_label)
-        row.addWidget(reset_btn)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        grid.addWidget(min_tag,                0, 0)
+        grid.addWidget(self._min_slider,       0, 1)
+        grid.addWidget(self._min_value_label,  0, 2)
+        grid.addWidget(max_tag,                1, 0)
+        grid.addWidget(self._max_slider,       1, 1)
+        grid.addWidget(self._max_value_label,  1, 2)
+        grid.setColumnStretch(1, 1)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        bottom.addWidget(reset_btn)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.addWidget(title)
-        layout.addLayout(row)
+        layout.addLayout(grid)
+        layout.addLayout(bottom)
 
-    def _on_change(self, raw: int) -> None:
-        v = self.value()
-        self._value_label.setText(f"{v:+.2f}")
-        self.valueChanged.emit(v)
+    # ---- mutual clamp: min < max ----
+    def _on_min_change(self, v: int) -> None:
+        if v >= self._max_slider.value():
+            self._max_slider.blockSignals(True)
+            self._max_slider.setValue(min(255, v + 1))
+            self._max_slider.blockSignals(False)
+        self._refresh_labels()
+        self._emit()
 
-    def value(self) -> float:
-        """Devuelve el valor normalizado en [-1, 1]."""
-        return self._slider.value() / (self._STEPS // 2)
+    def _on_max_change(self, v: int) -> None:
+        if v <= self._min_slider.value():
+            self._min_slider.blockSignals(True)
+            self._min_slider.setValue(max(0, v - 1))
+            self._min_slider.blockSignals(False)
+        self._refresh_labels()
+        self._emit()
+
+    def _refresh_labels(self) -> None:
+        self._min_value_label.setText(str(self._min_slider.value()))
+        self._max_value_label.setText(str(self._max_slider.value()))
+
+    def _emit(self) -> None:
+        self.valueChanged.emit(self._min_slider.value(), self._max_slider.value())
+
+    def value(self) -> tuple[int, int]:
+        return self._min_slider.value(), self._max_slider.value()
 
     def reset(self) -> None:
-        self._slider.setValue(0)
+        self._min_slider.blockSignals(True)
+        self._max_slider.blockSignals(True)
+        self._min_slider.setValue(0)
+        self._max_slider.setValue(255)
+        self._min_slider.blockSignals(False)
+        self._max_slider.blockSignals(False)
+        self._refresh_labels()
+        self._emit()
