@@ -1,34 +1,35 @@
 """
-Curva tonal por canal — modelo simplificado.
+Curva tonal por canal — remapeo de rango (redistribución sin pérdida).
 
-Una sola técnica: ecualización de histograma (Gonzalez & Woods §3.3).
-La curva se construye a partir de la CDF del canal y se mezcla con la
-identidad mediante `strength` ∈ [0, 1]:
-    strength = 0  → identidad (sin cambios)
-    strength = 1  → ecualización completa
-    intermedio    → blend lineal entre ambas
+El usuario define:
+    from_min, from_max  →  rango de entrada a redistribuir
+    to_min,   to_max    →  rango destino donde se colocan esos píxeles
 
-Sin clipping: la operación es monótona y NO tira información — solo
-redistribuye intensidades para aplanar el histograma.
+La LUT resultante:
+    x en [from_min, from_max]  →  interpolación lineal a [to_min, to_max]
+    x fuera de ese rango       →  identidad (lut[x] = x)
 
-La construcción real de la LUT vive en `core.redistribution.lut_equalize`.
+NO se pierde ningún píxel: todos se conservan, solo cambian de posición
+en el histograma. Esto es lo que el profesor llama "redistribución tonal
+con interpolación".
+
+La construcción real de la LUT vive en `core.redistribution.lut_remap`.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
-
 import numpy as np
-
 from core import redistribution as redist
 
 
 @dataclass
 class ChannelCurve:
-    strength: float = 1.0   # ∈ [0, 1]
+    from_min: int = 0    # inicio del rango de entrada
+    from_max: int = 255  # fin del rango de entrada
+    to_min:   int = 0    # inicio del rango destino
+    to_max:   int = 255  # fin del rango destino
 
 
-def build_lut(curve: ChannelCurve, channel: Optional[np.ndarray] = None) -> np.ndarray:
-    """LUT uint8 de 256 entradas. Requiere el canal (la curva depende del histograma)."""
-    if channel is None:
-        return np.arange(256, dtype=np.uint8)
-    return redist.lut_equalize(channel, curve.strength)
+def build_lut(curve: ChannelCurve, channel: np.ndarray | None = None) -> np.ndarray:
+    """LUT uint8 de 256 entradas usando remapeo lineal de rango."""
+    return redist.lut_remap(curve.from_min, curve.from_max,
+                            curve.to_min,   curve.to_max)

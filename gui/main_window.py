@@ -1,29 +1,24 @@
 """
-Ventana principal — modelo simplificado.
+Ventana principal — Redistribución de Rango por Canal.
 
-Una sola técnica de redistribución por canal: ecualización de histograma
-(Gonzalez & Woods §3.3). Cada canal expone un slider strength ∈ [0, 1]:
-    0 = identidad (sin cambios)
-    1 = ecualización completa
-    intermedio = blend lineal con la identidad
+Organización en dos pestañas:
+  - Pestaña 1: «Ecualización»
+      Imagen original + histogramas (original vs. modificado) por canal + sliders
+  - Pestaña 2: «Resultados»
+      Imagen modificada (R+G+B), thumbnail pixelado, imagen binarizada,
+      controles de pixelación y umbral.
 
-Sin clipping: la operación es monótona y NO tira información — solo
-redistribuye intensidades para aplanar el histograma. Útil como
-preprocesamiento previo a la binarización (separa mejor objeto/fondo).
-
-Pipeline: original → curvas → modificada → thumbnail (pixelado) → binarizada.
-La binarizada SIEMPRE se calcula sobre el thumbnail.
-
-Las imágenes de canal se muestran en escala de grises (matrices 2D).
+Pipeline: original → LUT por canal → modificada → thumbnail pixelado → binarizada.
 """
 from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QFont, QPalette, QColor
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QGridLayout, QVBoxLayout, QFileDialog, QToolBar,
-    QMessageBox, QStatusBar, QScrollArea,
+    QMainWindow, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout,
+    QFileDialog, QToolBar, QMessageBox, QStatusBar, QScrollArea,
+    QTabWidget, QLabel, QFrame, QSplitter,
 )
 
 from core.image_io import load_image, save_image
@@ -43,22 +38,108 @@ from gui.output_controls import OutputControls
 CHANNEL_COLORS = ("red", "green", "blue")
 CHANNEL_NAMES  = ("R", "G", "B")
 
+# ── paleta de colores del tema oscuro ────────────────────────────────
+_BG_DARK  = "#1e1e2e"
+_BG_MID   = "#252536"
+_BG_CARD  = "#313244"
+_FG       = "#cdd6f4"
+_ACCENT   = "#89b4fa"
+_BORDER   = "#45475a"
+
+_DARK_STYLESHEET = f"""
+    QMainWindow {{
+        background-color: {_BG_DARK};
+    }}
+    QToolBar {{
+        background: {_BG_MID};
+        border-bottom: 1px solid {_BORDER};
+        spacing: 8px;
+        padding: 4px 8px;
+    }}
+    QToolBar QToolButton {{
+        background: {_BG_CARD};
+        color: {_FG};
+        border: 1px solid {_BORDER};
+        border-radius: 4px;
+        padding: 5px 14px;
+        font-size: 13px;
+        font-weight: bold;
+    }}
+    QToolBar QToolButton:hover {{
+        background: {_ACCENT};
+        color: {_BG_DARK};
+    }}
+    QTabWidget::pane {{
+        background: {_BG_DARK};
+        border: 1px solid {_BORDER};
+        border-top: none;
+    }}
+    QTabBar::tab {{
+        background: {_BG_MID};
+        color: {_FG};
+        padding: 10px 28px;
+        font-size: 14px;
+        font-weight: bold;
+        border: 1px solid {_BORDER};
+        border-bottom: none;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+        margin-right: 2px;
+    }}
+    QTabBar::tab:selected {{
+        background: {_BG_DARK};
+        color: {_ACCENT};
+        border-bottom: 2px solid {_ACCENT};
+    }}
+    QTabBar::tab:hover {{
+        background: {_BG_CARD};
+    }}
+    QScrollArea {{
+        background: {_BG_DARK};
+        border: none;
+    }}
+    QLabel {{
+        color: {_FG};
+    }}
+    QFrame {{
+        color: {_FG};
+    }}
+    QStatusBar {{
+        background: {_BG_MID};
+        color: {_FG};
+        border-top: 1px solid {_BORDER};
+        font-size: 12px;
+        padding: 3px 10px;
+    }}
+"""
+
 
 class _ChannelBlock(QWidget):
-    """Bloque por canal: CurveView + sliders min/max."""
+    """Bloque por canal: histogramas (orig | mod) + 4 sliders."""
 
     def __init__(self, name: str, color: str, parent=None):
         super().__init__(parent)
-        self.name = name
+        self.name  = name
         self.color = color
 
-        self.curve = CurveView(color=color)
+        self.curve  = CurveView(color=color)
         self.slider = ChannelSlider(name, color)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.curve, 1)
         layout.addWidget(self.slider)
+
+
+class _SectionTitle(QLabel):
+    """Etiqueta grande para secciones dentro de las pestañas."""
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(
+            f"font-size: 16px; font-weight: bold; color: {_ACCENT}; "
+            f"padding: 6px 0; letter-spacing: 1px;"
+        )
 
 
 class MainWindow(QMainWindow):
@@ -66,12 +147,16 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ecualización Tonal por Canales — Histogram Equalization")
+        self.setWindowTitle(
+            "Redistribución Tonal por Canal — Preprocesamiento para Visión por Computadora"
+        )
         self.resize(1280, 720)
         self.showMaximized()
 
         self._original: np.ndarray | None = None
         self._curves: list[ChannelCurve] = [ChannelCurve() for _ in range(3)]
+
+        self.setStyleSheet(_DARK_STYLESHEET)
 
         self._build_toolbar()
         self._build_ui()
@@ -85,7 +170,9 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(
-            "Abre una imagen. Slider [0, 1]: 0 = identidad, 1 = ecualización completa."
+            "Abre una imagen. "
+            "Usa 'Origen desde/hasta' para seleccionar el pico del histograma, "
+            "y 'Destino desde/hasta' para elegir a dónde moverlo."
         )
 
     # ---------- toolbar ----------
@@ -94,94 +181,150 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        act_open = QAction("Abrir", self)
+        act_open = QAction("📂  Abrir imagen", self)
         act_open.triggered.connect(self._on_open)
         tb.addAction(act_open)
 
-        act_save = QAction("Guardar modificada", self)
+        act_save = QAction("💾  Guardar modificada", self)
         act_save.triggered.connect(self._on_save)
         tb.addAction(act_save)
 
         tb.addSeparator()
 
-        act_reset = QAction("Reset todo", self)
+        act_reset = QAction("↺  Reset todo", self)
         act_reset.triggered.connect(self._on_reset_all)
         tb.addAction(act_reset)
 
-    # ---------- layout ----------
-    def _build_ui(self) -> None:
-        central = QWidget()
-        grid = QGridLayout(central)
-        grid.setContentsMargins(8, 8, 8, 8)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
+        tb.addSeparator()
 
-        # fila 0: imagen original
-        self.panel_original = ImagePanel("Imagen original", min_size=(420, 400))
-        self.panel_original.setMaximumWidth(980)
-        self.panel_original.setMaximumHeight(560)
-        grid.addWidget(
-            self.panel_original,
-            0,
-            0,
-            1,
-            3,
-            Qt.AlignmentFlag.AlignHCenter,
+        act_auto = QAction("⚡ Auto (percentil 2/98)", self)
+        act_auto.setToolTip(
+            "Ajusta automáticamente from_min/from_max al percentil 2%/98% "
+            "de cada canal y mapea al rango completo [0, 255]."
         )
+        act_auto.triggered.connect(self._on_auto)
+        tb.addAction(act_auto)
 
-        # fila 1: canales en escala de grises
+    # ---------- layout con pestañas ----------
+    def _build_ui(self) -> None:
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+
+        # ════════════════════════════════════════════════════════════
+        # PESTAÑA 1: ECUALIZACIÓN
+        # ════════════════════════════════════════════════════════════
+        tab1_widget = QWidget()
+        tab1_layout = QVBoxLayout(tab1_widget)
+        tab1_layout.setContentsMargins(10, 10, 10, 10)
+        tab1_layout.setSpacing(8)
+
+        # — título de sección —
+        tab1_layout.addWidget(_SectionTitle("Imagen Original"))
+
+        # — imagen original centrada —
+        self.panel_original = ImagePanel("Imagen original", min_size=(400, 340))
+        self.panel_original.setMaximumWidth(900)
+        self.panel_original.setMaximumHeight(480)
+        orig_row = QHBoxLayout()
+        orig_row.addStretch(1)
+        orig_row.addWidget(self.panel_original)
+        orig_row.addStretch(1)
+        tab1_layout.addLayout(orig_row)
+
+        # — separador visual —
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.HLine)
+        sep1.setStyleSheet(f"color: {_BORDER};")
+        tab1_layout.addWidget(sep1)
+
+        # — título de histogramas —
+        tab1_layout.addWidget(_SectionTitle("Histogramas y Redistribución por Canal"))
+
+        # — canales en escala de grises (vista individual) —
+        chan_img_row = QHBoxLayout()
+        chan_img_row.setSpacing(8)
         self._channel_panels: list[ImagePanel] = []
-        for i, name in enumerate(CHANNEL_NAMES):
-            p = ImagePanel(f"Canal {name}", min_size=(220, 260))
+        for name in CHANNEL_NAMES:
+            p = ImagePanel(f"Canal {name} (modificado)", min_size=(180, 160))
             self._channel_panels.append(p)
-            grid.addWidget(p, 1, i)
+            chan_img_row.addWidget(p, 1)
+        tab1_layout.addLayout(chan_img_row)
 
-        # fila 2: curvas + sliders min/max
+        # — bloques de histograma + sliders por canal —
         self._blocks: list[_ChannelBlock] = []
-        for i, (name, color) in enumerate(zip(CHANNEL_NAMES, CHANNEL_COLORS)):
+        for name, color in zip(CHANNEL_NAMES, CHANNEL_COLORS):
             b = _ChannelBlock(name, color)
             self._blocks.append(b)
-            grid.addWidget(b, 2, i)
-            
-        # fila 3: resultado modificada + thumbnail + binarizada
-        self.panel_modified = ImagePanel("Modificada", min_size=(300, 350))
-        grid.addWidget(self.panel_modified, 3, 0, 2, 1)  # rowspan=2, columna 0
-        
-        self.panel_thumb = ImagePanel("Thumbnail (pixelado)", min_size=(240, 260))
-        grid.addWidget(self.panel_thumb, 3, 1, 1, 1)
-        
-        self.panel_binary = ImagePanel("Binarizada", min_size=(240, 260))
-        grid.addWidget(self.panel_binary, 3, 2, 1, 1)
-        
+            tab1_layout.addWidget(b)
+
+        # envolver en scroll
+        tab1_scroll = QScrollArea()
+        tab1_scroll.setWidgetResizable(True)
+        tab1_scroll.setWidget(tab1_widget)
+        tab1_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        tab1_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self.tabs.addTab(tab1_scroll, "🎨  Ecualización")
+
+        # ════════════════════════════════════════════════════════════
+        # PESTAÑA 2: RESULTADOS
+        # ════════════════════════════════════════════════════════════
+        tab2_widget = QWidget()
+        tab2_layout = QVBoxLayout(tab2_widget)
+        tab2_layout.setContentsMargins(10, 10, 10, 10)
+        tab2_layout.setSpacing(12)
+
+        tab2_layout.addWidget(_SectionTitle("Resultados del Preprocesamiento"))
+
+        # — fila de imágenes: modificada | thumbnail | binarizada —
+        img_row = QHBoxLayout()
+        img_row.setSpacing(12)
+
+        self.panel_modified = ImagePanel(
+            "Imagen Modificada (R+G+B)", min_size=(300, 300))
+        img_row.addWidget(self.panel_modified, 2)
+
+        self.panel_thumb = ImagePanel(
+            "Thumbnail Pixelado", min_size=(250, 250))
+        img_row.addWidget(self.panel_thumb, 1)
+
+        self.panel_binary = ImagePanel(
+            "Binarizada (blanco/negro)", min_size=(250, 250))
+        img_row.addWidget(self.panel_binary, 1)
+
+        tab2_layout.addLayout(img_row, 1)
+
+        # — separador —
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"color: {_BORDER};")
+        tab2_layout.addWidget(sep2)
+
+        # — controles de salida —
+        tab2_layout.addWidget(_SectionTitle("Controles de Salida"))
+
         self.output_controls = OutputControls()
-        grid.addWidget(self.output_controls, 4, 1, 1, 2)
-        
-        # ========== STRETCHES ==========
-        grid.setRowStretch(0, 3)
-        grid.setRowStretch(1, 2)
-        grid.setRowStretch(2, 4)
-        grid.setRowStretch(3, 2)
-        grid.setRowStretch(4, 1)
-        
-        # Ajustar anchos de columnas
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
+        tab2_layout.addWidget(self.output_controls)
 
-        central.setMinimumWidth(1280)
-        central.setMinimumHeight(1540)
+        tab2_scroll = QScrollArea()
+        tab2_scroll.setWidgetResizable(True)
+        tab2_scroll.setWidget(tab2_widget)
+        tab2_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        tab2_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(central)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setCentralWidget(scroll)
+        self.tabs.addTab(tab2_scroll, "📊  Resultados")
+
+        self.setCentralWidget(self.tabs)
 
     def _wire_signals(self) -> None:
         for i, block in enumerate(self._blocks):
-            block.slider.valueChanged.connect(
-                lambda v, idx=i: self._on_strength_change(idx, v)
+            block.slider.rangeChanged.connect(
+                lambda fm, fM, tm, tM, idx=i:
+                    self._on_range_change(idx, fm, fM, tm, tM)
             )
 
         oc = self.output_controls
@@ -190,11 +333,17 @@ class MainWindow(QMainWindow):
         oc.autoThresholdRequested.connect(self._on_auto_otsu)
 
     # ---------- handlers ----------
-    def _on_strength_change(self, idx: int, v: float) -> None:
-        self._curves[idx].strength = v
+    def _on_range_change(self, idx: int,
+                         from_min: int, from_max: int,
+                         to_min: int, to_max: int) -> None:
+        c = self._curves[idx]
+        c.from_min = from_min
+        c.from_max = from_max
+        c.to_min   = to_min
+        c.to_max   = to_max
+        self._blocks[idx].curve.set_window(from_min, from_max, to_min, to_max)
         self._preview_timer.start()
 
-    # ---------- acciones de archivo ----------
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Abrir imagen", "",
@@ -211,7 +360,8 @@ class MainWindow(QMainWindow):
         self.panel_original.set_image(img)
         self._recompute()
         self.statusBar().showMessage(
-            f"Cargada: {Path(path).name}   {img.shape[1]}×{img.shape[0]}"
+            f"Cargada: {Path(path).name}   {img.shape[1]}×{img.shape[0]}  —  "
+            "Selecciona el pico (naranja) y elige a dónde moverlo (azul)."
         )
 
     def _on_save(self) -> None:
@@ -233,8 +383,27 @@ class MainWindow(QMainWindow):
     def _on_reset_all(self) -> None:
         for i, block in enumerate(self._blocks):
             block.slider.reset()
-            self._curves[i].strength = 1.0
-        self._preview_timer.start()
+            self._curves[i] = ChannelCurve()
+
+    def _on_auto(self) -> None:
+        """Ajusta from_min/from_max al percentil 2/98 de cada canal → to [0, 255]."""
+        if self._original is None:
+            return
+        for i in range(3):
+            ch = self._original[..., i]
+            lo = int(np.percentile(ch, 2))
+            hi = int(np.percentile(ch, 98))
+            lo = max(0, min(lo, 254))
+            hi = max(lo + 1, min(hi, 255))
+            self._curves[i].from_min = lo
+            self._curves[i].from_max = hi
+            self._curves[i].to_min   = 0
+            self._curves[i].to_max   = 255
+            self._blocks[i].slider.set_values(lo, hi, 0, 255)
+            self._blocks[i].curve.set_window(lo, hi, 0, 255)
+        self.statusBar().showMessage(
+            "Auto-remap aplicado: percentil 2%→0 y 98%→255 por canal."
+        )
 
     def _on_auto_otsu(self) -> None:
         if self._original is None:
@@ -243,13 +412,13 @@ class MainWindow(QMainWindow):
         ch_r, ch_g, ch_b = apply_channel_curves(self._original, *self._current_curves())
         modified = np.stack([ch_r, ch_g, ch_b], axis=-1)
         thumb = pixelated_thumbnail(
-            modified,
-            self.output_controls.pixelation(),
-            220,
+            modified, self.output_controls.pixelation(), 220,
         )
         _, otsu_value = binarize_manual(thumb, None)
         self.output_controls.set_threshold(otsu_value)
-        self.statusBar().showMessage(f"Umbral Otsu calculado sobre thumbnail: {otsu_value}")
+        self.statusBar().showMessage(
+            f"Umbral Otsu calculado sobre thumbnail: {otsu_value}"
+        )
 
     # ---------- cómputo ----------
     def _current_curves(self) -> tuple[ChannelCurve, ChannelCurve, ChannelCurve]:
@@ -272,22 +441,30 @@ class MainWindow(QMainWindow):
         if self._original is None:
             for block, c in zip(self._blocks, curves):
                 block.curve.set_lut(build_lut(c))
-                block.curve.set_histogram(np.zeros(256, dtype=np.int64))
+                block.curve.set_window(c.from_min, c.from_max, c.to_min, c.to_max)
+                block.curve.set_histogram_orig(np.zeros(256, dtype=np.int64))
+                block.curve.set_histogram_mod(np.zeros(256, dtype=np.int64))
             return
-
-        # LUT por canal — depende del histograma del canal ORIGINAL
-        for i, (block, c) in enumerate(zip(self._blocks, curves)):
-            block.curve.set_lut(build_lut(c, self._original[..., i]))
 
         result = self._compute()
 
-        # canales en grises
+        for i, (block, c) in enumerate(zip(self._blocks, curves)):
+            # LUT actual (ya no se dibuja, pero se mantiene la interfaz)
+            block.curve.set_lut(build_lut(c))
+            block.curve.set_window(c.from_min, c.from_max, c.to_min, c.to_max)
+
+            # histograma ORIGINAL del canal
+            block.curve.set_histogram_orig(
+                histogram_uint8(self._original[..., i])
+            )
+            # histograma MODIFICADO del canal
+            block.curve.set_histogram_mod(
+                histogram_uint8(result.channels_modified[i])
+            )
+
+        # paneles de canal en escala de grises
         for panel, ch in zip(self._channel_panels, result.channels_modified):
             panel.set_image(ch)
-
-        # histogramas del canal MODIFICADO
-        for block, ch in zip(self._blocks, result.channels_modified):
-            block.curve.set_histogram(histogram_uint8(ch))
 
         # resultados finales
         self.panel_modified.set_image(result.modified)
