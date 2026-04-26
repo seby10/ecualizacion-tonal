@@ -1,17 +1,14 @@
 """
-Ventana principal.
+Ventana principal — modelo simplificado.
 
-Layout (de arriba hacia abajo):
-  0) Toolbar: Abrir / Guardar / Reset todo.
-  1) Imagen original (centrada, ocupa las 3 columnas).
-  2) Tres imágenes: canal R, G, B (modificados, pseudo-coloreados).
-  3) Tres histogramas, uno por canal (del canal modificado).
-  4) Tres sliders, uno por canal.
-  5) Tres imágenes: modificada (RGB), binarizada (Otsu), thumbnail.
+Una sola técnica de redistribución por canal: contrast stretching
+(Gonzalez & Woods §3.2). Cada canal expone dos sliders (min_in, max_in)
+que definen la ventana de estiramiento.
 
-Al mover un slider se recalcula la curva, la LUT, el canal modificado,
-su histograma y la imagen final. Un pequeño debounce evita recomputar
-en cada micro-movimiento.
+Pipeline: original → curvas → modificada → thumbnail (pixelado) → binarizada.
+La binarizada SIEMPRE se calcula sobre el thumbnail.
+
+Las imágenes de canal se muestran en escala de grises (matrices 2D).
 """
 from pathlib import Path
 
@@ -19,109 +16,73 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QGridLayout, QFileDialog, QToolBar,
+    QMainWindow, QWidget, QGridLayout, QVBoxLayout, QFileDialog, QToolBar,
     QMessageBox, QStatusBar, QScrollArea,
 )
 
 from core.image_io import load_image, save_image
 from core.histogram import histogram_uint8
-from core.pipeline import process, ProcessResult
-from core.tone_curve import ToneParams, build_lut
+from core.pipeline import (
+    process, ProcessResult, OutputParams,
+    binarize_manual, apply_channel_curves,
+)
+from core.tone_curve import ChannelCurve, build_lut
 
 from gui.image_viewer import ImagePanel
-from gui.histogram_widget import HistogramWidget
+from gui.curve_view import CurveView
 from gui.channel_panel import ChannelSlider
+from gui.output_controls import OutputControls
 
 
 CHANNEL_COLORS = ("red", "green", "blue")
-CHANNEL_NAMES = ("R", "G", "B")
+CHANNEL_NAMES  = ("R", "G", "B")
+
+
+class _ChannelBlock(QWidget):
+    """Bloque por canal: CurveView + sliders min/max."""
+
+    def __init__(self, name: str, color: str, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.color = color
+
+        self.curve = CurveView(color=color)
+        self.slider = ChannelSlider(name, color)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.addWidget(self.curve, 1)
+        layout.addWidget(self.slider)
 
 
 class MainWindow(QMainWindow):
-    DEBOUNCE_MS = 60
+    DEBOUNCE_MS = 40
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ecualización Tonal por Canales")
-        self.resize(1280, 1000)
+        self.setWindowTitle("Ecualización Tonal por Canales — Contrast Stretching")
+        self.resize(1280, 720)
+        self.showMaximized()
 
         self._original: np.ndarray | None = None
+        self._curves: list[ChannelCurve] = [ChannelCurve() for _ in range(3)]
 
-        self._build_ui()
         self._build_toolbar()
+        self._build_ui()
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(self.DEBOUNCE_MS)
         self._preview_timer.timeout.connect(self._recompute)
 
-        for s in self._sliders:
-            s.valueChanged.connect(lambda _=None: self._preview_timer.start())
+        self._wire_signals()
 
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage("Abre una imagen para comenzar.")
+        self.statusBar().showMessage(
+            "Abre una imagen. Sliders min/max definen la ventana estirada a [0, 255]."
+        )
 
-    # ---------- construcción UI ----------
-    def _build_ui(self) -> None:
-        central = QWidget()
-        grid = QGridLayout(central)
-        grid.setContentsMargins(6, 6, 6, 6)
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(6)
-
-        # fila 0: imagen original (3 columnas)
-        self.panel_original = ImagePanel("Imagen original", min_size=(420, 260))
-        grid.addWidget(self.panel_original, 0, 0, 1, 3)
-
-        # fila 1: canales R, G, B (modificados)
-        self._channel_panels: list[ImagePanel] = []
-        for i, (name, color) in enumerate(zip(CHANNEL_NAMES, CHANNEL_COLORS)):
-            panel = ImagePanel(f"Canal {name}", min_size=(180, 180))
-            self._channel_panels.append(panel)
-            grid.addWidget(panel, 1, i)
-
-        # fila 2: histogramas
-        self._histograms: list[HistogramWidget] = []
-        for i, color in enumerate(CHANNEL_COLORS):
-            hw = HistogramWidget(color=color)
-            self._histograms.append(hw)
-            grid.addWidget(hw, 2, i)
-
-        # fila 3: sliders
-        self._sliders: list[ChannelSlider] = []
-        for i, (name, color) in enumerate(zip(CHANNEL_NAMES, CHANNEL_COLORS)):
-            s = ChannelSlider(name, color)
-            self._sliders.append(s)
-            grid.addWidget(s, 3, i)
-
-        # fila 4: resultados finales
-        self.panel_modified = ImagePanel("Modificada", min_size=(180, 180))
-        self.panel_binary   = ImagePanel("Binarizada (Otsu)", min_size=(180, 180))
-        self.panel_thumb    = ImagePanel("Thumbnail", min_size=(180, 180))
-        grid.addWidget(self.panel_modified, 4, 0)
-        grid.addWidget(self.panel_binary,   4, 1)
-        grid.addWidget(self.panel_thumb,    4, 2)
-
-        # proporciones verticales: los histogramas ahora pesan fuerte
-        grid.setRowStretch(0, 3)   # original
-        grid.setRowStretch(1, 2)   # canales
-        grid.setRowStretch(2, 3)   # histogramas (legibles)
-        grid.setRowStretch(3, 0)   # sliders (altura fija)
-        grid.setRowStretch(4, 2)   # resultados
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
-
-        # altura mínima para garantizar lectura: si la ventana es más baja,
-        # aparece scroll vertical.
-        central.setMinimumHeight(1400)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(central)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setCentralWidget(scroll)
-
+    # ---------- toolbar ----------
     def _build_toolbar(self) -> None:
         tb = QToolBar("Principal")
         tb.setMovable(False)
@@ -141,7 +102,94 @@ class MainWindow(QMainWindow):
         act_reset.triggered.connect(self._on_reset_all)
         tb.addAction(act_reset)
 
-    # ---------- eventos ----------
+    # ---------- layout ----------
+    def _build_ui(self) -> None:
+        central = QWidget()
+        grid = QGridLayout(central)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+
+        # fila 0: imagen original
+        self.panel_original = ImagePanel("Imagen original", min_size=(420, 400))
+        self.panel_original.setMaximumWidth(980)
+        self.panel_original.setMaximumHeight(560)
+        grid.addWidget(
+            self.panel_original,
+            0,
+            0,
+            1,
+            3,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
+
+        # fila 1: canales en escala de grises
+        self._channel_panels: list[ImagePanel] = []
+        for i, name in enumerate(CHANNEL_NAMES):
+            p = ImagePanel(f"Canal {name}", min_size=(220, 260))
+            self._channel_panels.append(p)
+            grid.addWidget(p, 1, i)
+
+        # fila 2: curvas + sliders min/max
+        self._blocks: list[_ChannelBlock] = []
+        for i, (name, color) in enumerate(zip(CHANNEL_NAMES, CHANNEL_COLORS)):
+            b = _ChannelBlock(name, color)
+            self._blocks.append(b)
+            grid.addWidget(b, 2, i)
+            
+        # fila 3: resultado modificada + thumbnail + binarizada
+        self.panel_modified = ImagePanel("Modificada", min_size=(300, 350))
+        grid.addWidget(self.panel_modified, 3, 0, 2, 1)  # rowspan=2, columna 0
+        
+        self.panel_thumb = ImagePanel("Thumbnail (pixelado)", min_size=(240, 260))
+        grid.addWidget(self.panel_thumb, 3, 1, 1, 1)
+        
+        self.panel_binary = ImagePanel("Binarizada", min_size=(240, 260))
+        grid.addWidget(self.panel_binary, 3, 2, 1, 1)
+        
+        self.output_controls = OutputControls()
+        grid.addWidget(self.output_controls, 4, 1, 1, 2)
+        
+        # ========== STRETCHES ==========
+        grid.setRowStretch(0, 3)
+        grid.setRowStretch(1, 2)
+        grid.setRowStretch(2, 4)
+        grid.setRowStretch(3, 2)
+        grid.setRowStretch(4, 1)
+        
+        # Ajustar anchos de columnas
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+
+        central.setMinimumWidth(1280)
+        central.setMinimumHeight(1540)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(central)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setCentralWidget(scroll)
+
+    def _wire_signals(self) -> None:
+        for i, block in enumerate(self._blocks):
+            block.slider.valueChanged.connect(
+                lambda lo, hi, idx=i: self._on_window_change(idx, lo, hi)
+            )
+
+        oc = self.output_controls
+        oc.pixelationChanged.connect(lambda _: self._preview_timer.start())
+        oc.thresholdChanged.connect(lambda _: self._preview_timer.start())
+        oc.autoThresholdRequested.connect(self._on_auto_otsu)
+
+    # ---------- handlers ----------
+    def _on_window_change(self, idx: int, lo: int, hi: int) -> None:
+        self._curves[idx].min_in = lo
+        self._curves[idx].max_in = hi
+        self._preview_timer.start()
+
+    # ---------- acciones de archivo ----------
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Abrir imagen", "",
@@ -170,51 +218,74 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        result = self._compute()
         try:
+            result = self._compute()
             save_image(path, result.modified)
             self.statusBar().showMessage(f"Guardado: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Error al guardar", str(e))
 
     def _on_reset_all(self) -> None:
-        for s in self._sliders:
-            s.reset()
+        for i, block in enumerate(self._blocks):
+            block.slider.reset()
+            self._curves[i].min_in = 0
+            self._curves[i].max_in = 255
+        self._preview_timer.start()
+
+    def _on_auto_otsu(self) -> None:
+        if self._original is None:
+            return
+        from core.pipeline import pixelated_thumbnail
+        ch_r, ch_g, ch_b = apply_channel_curves(self._original, *self._current_curves())
+        modified = np.stack([ch_r, ch_g, ch_b], axis=-1)
+        thumb = pixelated_thumbnail(
+            modified,
+            self.output_controls.pixelation(),
+            220,
+        )
+        _, otsu_value = binarize_manual(thumb, None)
+        self.output_controls.set_threshold(otsu_value)
+        self.statusBar().showMessage(f"Umbral Otsu calculado sobre thumbnail: {otsu_value}")
 
     # ---------- cómputo ----------
-    def _current_params(self) -> tuple[ToneParams, ToneParams, ToneParams]:
-        return tuple(ToneParams(strength=s.value()) for s in self._sliders)  # type: ignore[return-value]
+    def _current_curves(self) -> tuple[ChannelCurve, ChannelCurve, ChannelCurve]:
+        return tuple(self._curves)  # type: ignore[return-value]
+
+    def _current_outputs(self) -> OutputParams:
+        return OutputParams(
+            pixelation=self.output_controls.pixelation(),
+            binary_threshold=self.output_controls.threshold(),
+        )
 
     def _compute(self) -> ProcessResult:
         assert self._original is not None
-        r, g, b = self._current_params()
-        return process(self._original, r, g, b)
+        r, g, b = self._current_curves()
+        return process(self._original, r, g, b, self._current_outputs())
 
     def _recompute(self) -> None:
-        params = self._current_params()
+        curves = self._current_curves()
 
-        # LUTs siempre, aunque no haya imagen todavía
-        luts = [build_lut(p) for p in params]
+        # LUT y ventana visual por canal
+        for block, c in zip(self._blocks, curves):
+            block.curve.set_lut(build_lut(c))
+            block.curve.set_window(c.min_in, c.max_in)
 
         if self._original is None:
-            # muestra solo la curva teórica sobre un histograma vacío
-            for hw, lut in zip(self._histograms, luts):
-                hw.set_histogram(np.zeros(256, dtype=np.int64))
-                hw.set_lut(lut)
+            for block in self._blocks:
+                block.curve.set_histogram(np.zeros(256, dtype=np.int64))
             return
 
         result = self._compute()
 
-        # canales pseudo-coloreados
-        for panel, colored in zip(self._channel_panels, result.channels_colored):
-            panel.set_image(colored)
+        # canales en grises
+        for panel, ch in zip(self._channel_panels, result.channels_modified):
+            panel.set_image(ch)
 
-        # histogramas del canal MODIFICADO + curva LUT superpuesta
-        for hw, ch, lut in zip(self._histograms, result.channels_modified, luts):
-            hw.set_histogram(histogram_uint8(ch))
-            hw.set_lut(lut)
+        # histogramas del canal MODIFICADO
+        for block, ch in zip(self._blocks, result.channels_modified):
+            block.curve.set_histogram(histogram_uint8(ch))
 
         # resultados finales
         self.panel_modified.set_image(result.modified)
-        self.panel_binary.set_image(result.binary)
         self.panel_thumb.set_image(result.thumbnail)
+        self.panel_binary.set_image(result.binary)

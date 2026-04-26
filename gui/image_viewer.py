@@ -10,7 +10,7 @@ from utils.qimage_bridge import ndarray_to_qpixmap
 
 
 class ImagePanel(QFrame):
-    def __init__(self, title: str, min_size: tuple[int, int] = (160, 160), parent=None):
+    def __init__(self, title: str, min_size: tuple[int, int] = (200, 200), parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._title = QLabel(title)
