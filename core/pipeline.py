@@ -55,12 +55,21 @@ def apply_channel_curves(
     rgb: np.ndarray,
     r: ChannelCurve, g: ChannelCurve, b: ChannelCurve,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    lut_r = build_lut(r, rgb[..., 0])
-    lut_g = build_lut(g, rgb[..., 1])
-    lut_b = build_lut(b, rgb[..., 2])
-    ch_r = apply_lut(rgb[..., 0], lut_r)
-    ch_g = apply_lut(rgb[..., 1], lut_g)
-    ch_b = apply_lut(rgb[..., 2], lut_b)
+    def process_channel(ch: np.ndarray, curve: ChannelCurve) -> np.ndarray:
+        lut = build_lut(curve, ch)
+        remapped = apply_lut(ch, lut)
+        if curve.transfer_ratio >= 0.999:
+            return remapped
+        
+        # Mover solo un porcentaje aleatorio de píxeles que están en el rango de entrada
+        in_range = (ch >= curve.from_min) & (ch <= curve.from_max)
+        random_mask = np.random.rand(*ch.shape) < curve.transfer_ratio
+        
+        return np.where(in_range & random_mask, remapped, ch)
+
+    ch_r = process_channel(rgb[..., 0], r)
+    ch_g = process_channel(rgb[..., 1], g)
+    ch_b = process_channel(rgb[..., 2], b)
     return ch_r, ch_g, ch_b
 
 

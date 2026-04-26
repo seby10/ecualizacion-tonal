@@ -323,8 +323,8 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         for i, block in enumerate(self._blocks):
             block.slider.rangeChanged.connect(
-                lambda fm, fM, tm, tM, idx=i:
-                    self._on_range_change(idx, fm, fM, tm, tM)
+                lambda fm, fM, tm, tM, trans, idx=i:
+                    self._on_range_change(idx, fm, fM, tm, tM, trans)
             )
 
         oc = self.output_controls
@@ -335,12 +335,13 @@ class MainWindow(QMainWindow):
     # ---------- handlers ----------
     def _on_range_change(self, idx: int,
                          from_min: int, from_max: int,
-                         to_min: int, to_max: int) -> None:
+                         to_min: int, to_max: int, transfer: float) -> None:
         c = self._curves[idx]
         c.from_min = from_min
         c.from_max = from_max
         c.to_min   = to_min
         c.to_max   = to_max
+        c.transfer_ratio = transfer
         self._blocks[idx].curve.set_window(from_min, from_max, to_min, to_max)
         self._preview_timer.start()
 
@@ -399,7 +400,8 @@ class MainWindow(QMainWindow):
             self._curves[i].from_max = hi
             self._curves[i].to_min   = 0
             self._curves[i].to_max   = 255
-            self._blocks[i].slider.set_values(lo, hi, 0, 255)
+            self._curves[i].transfer_ratio = 1.0
+            self._blocks[i].slider.set_values(lo, hi, 0, 255, 1.0)
             self._blocks[i].curve.set_window(lo, hi, 0, 255)
         self.statusBar().showMessage(
             "Auto-remap aplicado: percentil 2%→0 y 98%→255 por canal."

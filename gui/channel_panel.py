@@ -65,10 +65,10 @@ def _val_label(text: str, color: str) -> QLabel:
 
 class ChannelSlider(QWidget):
     """
-    Cuatro sliders: from_min / from_max / to_min / to_max.
-    Emite rangeChanged(from_min, from_max, to_min, to_max).
+    Cuatro sliders: from_min / from_max / to_min / to_max + transfer_ratio.
+    Emite rangeChanged(from_min, from_max, to_min, to_max, transfer_ratio).
     """
-    rangeChanged = Signal(int, int, int, int)
+    rangeChanged = Signal(int, int, int, int, float)
 
     def __init__(self, channel_name: str, color: str, parent=None):
         super().__init__(parent)
@@ -99,6 +99,7 @@ class ChannelSlider(QWidget):
             "from_max": _make_slider(1, 255, 255),
             "to_min":   _make_slider(0, 254, 0),
             "to_max":   _make_slider(1, 255, 255),
+            "transfer": _make_slider(0, 100, 100),
         }
 
         self._v = {
@@ -106,6 +107,7 @@ class ChannelSlider(QWidget):
             "from_max": _val_label("255", _ORANGE),
             "to_min":   _val_label("0",   _BLUE),
             "to_max":   _val_label("255", _BLUE),
+            "transfer": _val_label("100%", _FG),
         }
 
         rows = [
@@ -113,6 +115,7 @@ class ChannelSlider(QWidget):
             ("Origen hasta",  "from_max", _ORANGE, "1",   "255"),
             ("Destino desde", "to_min",   _BLUE,   "0",   "254"),
             ("Destino hasta", "to_max",   _BLUE,   "1",   "255"),
+            ("Cantidad (%)",  "transfer", _FG,     "0%",  "100%"),
         ]
 
         grid = QGridLayout()
@@ -208,32 +211,41 @@ class ChannelSlider(QWidget):
             self._s["to_min"].setValue(max(v - 1, 0)); tm = v - 1
 
         for k, sl in self._s.items():
-            self._v[k].setText(str(sl.value()))
+            if k == "transfer":
+                self._v[k].setText(f"{sl.value()}%")
+            else:
+                self._v[k].setText(str(sl.value()))
 
         self._busy = False
         self.rangeChanged.emit(
             self._s["from_min"].value(), self._s["from_max"].value(),
             self._s["to_min"].value(),   self._s["to_max"].value(),
+            self._s["transfer"].value() / 100.0,
         )
 
     # ---------- interfaz pública ----------
-    def values(self) -> tuple[int, int, int, int]:
+    def values(self) -> tuple[int, int, int, int, float]:
         return (
             self._s["from_min"].value(), self._s["from_max"].value(),
             self._s["to_min"].value(),   self._s["to_max"].value(),
+            self._s["transfer"].value() / 100.0,
         )
 
     def set_values(self, from_min: int, from_max: int,
-                   to_min: int, to_max: int) -> None:
+                   to_min: int, to_max: int, transfer: float = 1.0) -> None:
         self._busy = True
         self._s["from_min"].setValue(max(0, min(from_min, 254)))
         self._s["from_max"].setValue(max(1, min(from_max, 255)))
         self._s["to_min"].setValue(max(0, min(to_min, 254)))
         self._s["to_max"].setValue(max(1, min(to_max, 255)))
+        self._s["transfer"].setValue(max(0, min(int(transfer * 100), 100)))
         for k, sl in self._s.items():
-            self._v[k].setText(str(sl.value()))
+            if k == "transfer":
+                self._v[k].setText(f"{sl.value()}%")
+            else:
+                self._v[k].setText(str(sl.value()))
         self._busy = False
         self.rangeChanged.emit(*self.values())
 
     def reset(self) -> None:
-        self.set_values(0, 255, 0, 255)
+        self.set_values(0, 255, 0, 255, 1.0)

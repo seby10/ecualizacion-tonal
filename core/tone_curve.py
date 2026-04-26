@@ -27,6 +27,7 @@ class ChannelCurve:
     from_max: int = 255  # fin del rango de entrada
     to_min:   int = 0    # inicio del rango destino
     to_max:   int = 255  # fin del rango destino
+    transfer_ratio: float = 1.0  # 0.0 a 1.0, porcentaje de píxeles a mover
 
 
 def build_lut(curve: ChannelCurve, channel: np.ndarray | None = None) -> np.ndarray:
