@@ -1,9 +1,15 @@
 """
 Ventana principal — modelo simplificado.
 
-Una sola técnica de redistribución por canal: contrast stretching
-(Gonzalez & Woods §3.2). Cada canal expone dos sliders (min_in, max_in)
-que definen la ventana de estiramiento.
+Una sola técnica de redistribución por canal: ecualización de histograma
+(Gonzalez & Woods §3.3). Cada canal expone un slider strength ∈ [0, 1]:
+    0 = identidad (sin cambios)
+    1 = ecualización completa
+    intermedio = blend lineal con la identidad
+
+Sin clipping: la operación es monótona y NO tira información — solo
+redistribuye intensidades para aplanar el histograma. Útil como
+preprocesamiento previo a la binarización (separa mejor objeto/fondo).
 
 Pipeline: original → curvas → modificada → thumbnail (pixelado) → binarizada.
 La binarizada SIEMPRE se calcula sobre el thumbnail.
@@ -60,7 +66,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ecualización Tonal por Canales — Contrast Stretching")
+        self.setWindowTitle("Ecualización Tonal por Canales — Histogram Equalization")
         self.resize(1280, 720)
         self.showMaximized()
 
@@ -79,7 +85,7 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(
-            "Abre una imagen. Sliders min/max definen la ventana estirada a [0, 255]."
+            "Abre una imagen. Slider [0, 1]: 0 = identidad, 1 = ecualización completa."
         )
 
     # ---------- toolbar ----------
@@ -175,7 +181,7 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         for i, block in enumerate(self._blocks):
             block.slider.valueChanged.connect(
-                lambda lo, hi, idx=i: self._on_window_change(idx, lo, hi)
+                lambda v, idx=i: self._on_strength_change(idx, v)
             )
 
         oc = self.output_controls
@@ -184,9 +190,8 @@ class MainWindow(QMainWindow):
         oc.autoThresholdRequested.connect(self._on_auto_otsu)
 
     # ---------- handlers ----------
-    def _on_window_change(self, idx: int, lo: int, hi: int) -> None:
-        self._curves[idx].min_in = lo
-        self._curves[idx].max_in = hi
+    def _on_strength_change(self, idx: int, v: float) -> None:
+        self._curves[idx].strength = v
         self._preview_timer.start()
 
     # ---------- acciones de archivo ----------
@@ -228,8 +233,7 @@ class MainWindow(QMainWindow):
     def _on_reset_all(self) -> None:
         for i, block in enumerate(self._blocks):
             block.slider.reset()
-            self._curves[i].min_in = 0
-            self._curves[i].max_in = 255
+            self._curves[i].strength = 1.0
         self._preview_timer.start()
 
     def _on_auto_otsu(self) -> None:
@@ -265,15 +269,15 @@ class MainWindow(QMainWindow):
     def _recompute(self) -> None:
         curves = self._current_curves()
 
-        # LUT y ventana visual por canal
-        for block, c in zip(self._blocks, curves):
-            block.curve.set_lut(build_lut(c))
-            block.curve.set_window(c.min_in, c.max_in)
-
         if self._original is None:
-            for block in self._blocks:
+            for block, c in zip(self._blocks, curves):
+                block.curve.set_lut(build_lut(c))
                 block.curve.set_histogram(np.zeros(256, dtype=np.int64))
             return
+
+        # LUT por canal — depende del histograma del canal ORIGINAL
+        for i, (block, c) in enumerate(zip(self._blocks, curves)):
+            block.curve.set_lut(build_lut(c, self._original[..., i]))
 
         result = self._compute()
 

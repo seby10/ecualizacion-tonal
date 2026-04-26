@@ -55,9 +55,9 @@ def apply_channel_curves(
     rgb: np.ndarray,
     r: ChannelCurve, g: ChannelCurve, b: ChannelCurve,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    lut_r = build_lut(r)
-    lut_g = build_lut(g)
-    lut_b = build_lut(b)
+    lut_r = build_lut(r, rgb[..., 0])
+    lut_g = build_lut(g, rgb[..., 1])
+    lut_b = build_lut(b, rgb[..., 2])
     ch_r = apply_lut(rgb[..., 0], lut_r)
     ch_g = apply_lut(rgb[..., 1], lut_g)
     ch_b = apply_lut(rgb[..., 2], lut_b)

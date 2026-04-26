@@ -2,9 +2,9 @@
 Widget matplotlib embebido que muestra:
   * Histograma del canal (relleno en el color del canal).
   * Curva tonal actual (línea negra, eje Y derecho en [0, 255]).
+    En modo ecualización, la curva es la CDF normalizada del canal mezclada
+    con la identidad según `strength`.
   * Diagonal identidad de referencia (gris punteada).
-  * Ventana de contrast stretching: dos verticales en min_in y max_in
-    con sombreado entre ambas (zona "estirada").
 """
 from __future__ import annotations
 
@@ -36,8 +36,6 @@ class CurveView(QWidget):
 
         self._hist = np.zeros(256, dtype=np.int64)
         self._lut: np.ndarray | None = None
-        self._min_in: int = 0
-        self._max_in: int = 255
 
         self.figure = Figure(figsize=(5.8, 3.3), tight_layout=True)
         self.canvas = _FigureCanvasNoWheel(self.figure)
@@ -68,11 +66,6 @@ class CurveView(QWidget):
         self._lut = lut
         self._redraw()
 
-    def set_window(self, min_in: int, max_in: int) -> None:
-        self._min_in = int(min_in)
-        self._max_in = int(max_in)
-        self._redraw()
-
     # ------------- dibujo -------------
     def _configure_axes(self) -> None:
         self.ax.set_xlim(0, 255)
@@ -98,20 +91,11 @@ class CurveView(QWidget):
                                  color=self.color, alpha=0.55,
                                  edgecolor=self.color, linewidth=0.6)
 
-        # ventana de stretching: sombreado + verticales
-        if self._max_in > self._min_in:
-            self.ax2.axvspan(self._min_in, self._max_in,
-                             color="#ffd54f", alpha=0.18, zorder=0)
-        self.ax2.axvline(self._min_in, color="#c33",
-                         linestyle="-", linewidth=1.1, alpha=0.85)
-        self.ax2.axvline(self._max_in, color="#c33",
-                         linestyle="-", linewidth=1.1, alpha=0.85)
-
         # diagonal identidad
         self.ax2.plot([0, 255], [0, 255], color="gray",
                       linestyle="--", linewidth=0.9, alpha=0.55)
 
-        # curva tonal (rampa lineal del stretching)
+        # curva tonal (CDF blendeada con identidad)
         if self._lut is not None:
             self.ax2.plot(x, self._lut, color="black", linewidth=1.8)
 

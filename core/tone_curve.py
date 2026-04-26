@@ -1,14 +1,21 @@
 """
 Curva tonal por canal — modelo simplificado.
 
-Una sola técnica: contrast stretching (Gonzalez & Woods §3.2).
-Cada canal se describe por una ventana [min_in, max_in] que se estira
-linealmente hasta cubrir [0, 255].
+Una sola técnica: ecualización de histograma (Gonzalez & Woods §3.3).
+La curva se construye a partir de la CDF del canal y se mezcla con la
+identidad mediante `strength` ∈ [0, 1]:
+    strength = 0  → identidad (sin cambios)
+    strength = 1  → ecualización completa
+    intermedio    → blend lineal entre ambas
 
-La construcción real de la LUT vive en `core.redistribution` (manual).
+Sin clipping: la operación es monótona y NO tira información — solo
+redistribuye intensidades para aplanar el histograma.
+
+La construcción real de la LUT vive en `core.redistribution.lut_equalize`.
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -17,10 +24,11 @@ from core import redistribution as redist
 
 @dataclass
 class ChannelCurve:
-    min_in: int = 0
-    max_in: int = 255
+    strength: float = 1.0   # ∈ [0, 1]
 
 
-def build_lut(curve: ChannelCurve) -> np.ndarray:
-    """LUT uint8 de 256 entradas para la ventana [min_in, max_in]."""
-    return redist.lut_stretch(curve.min_in, curve.max_in)
+def build_lut(curve: ChannelCurve, channel: Optional[np.ndarray] = None) -> np.ndarray:
+    """LUT uint8 de 256 entradas. Requiere el canal (la curva depende del histograma)."""
+    if channel is None:
+        return np.arange(256, dtype=np.uint8)
+    return redist.lut_equalize(channel, curve.strength)
