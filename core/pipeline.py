@@ -27,6 +27,7 @@ class OutputParams:
     pixelation: int = 4                  # factor de downsample del thumbnail (1..32)
     binary_threshold: int | None = None  # None = Otsu manual; entero = umbral fijo
     thumb_display_side: int = 220        # tamaño objetivo de visualización
+    min_contour_area: int = 50           # área mínima para filtrar contornos (px²)
 
 
 @dataclass
@@ -36,6 +37,8 @@ class ProcessResult:
     thumbnail: np.ndarray  # pixelado, RGB uint8
     binary:    np.ndarray  # binarización del THUMBNAIL (mismo tamaño que thumb)
     otsu_value: int
+    contours_image: np.ndarray  # thumbnail con contornos y bounding boxes
+    contour_count: int          # número de objetos detectados
 
 
 # =====================================================================
@@ -143,6 +146,72 @@ def pixelated_thumbnail(rgb: np.ndarray, factor: int, display_side: int) -> np.n
 
 
 # =====================================================================
+# Detección de contornos (paso de visión por computadora)
+# =====================================================================
+#
+# Este paso CONSUME la salida del preprocesamiento (imagen binarizada)
+# y demuestra que la binarización separa correctamente objeto/fondo.
+#
+# Operaciones:
+#   1. cv2.findContours sobre la imagen binaria (border following).
+#   2. Filtrado por área mínima para eliminar ruido.
+#   3. Dibujo de contornos (verde) y bounding boxes (rojo) sobre
+#      una copia del thumbnail a color.
+#   4. Etiquetas numéricas para cada objeto detectado.
+#
+# NOTA: aquí SÍ se usa cv2.findContours porque la detección de
+# contornos es el paso de VISIÓN POR COMPUTADORA, no de
+# preprocesamiento. El preprocesamiento (ecualización, binarización,
+# Otsu) fue implementado manualmente.
+# =====================================================================
+
+def detect_contours(
+    binary: np.ndarray,
+    color_bg: np.ndarray,
+    min_area: int = 50,
+) -> tuple[np.ndarray, int]:
+    """
+    Detecta contornos en la imagen binarizada y los dibuja sobre
+    una copia de la imagen a color (thumbnail).
+
+    Parámetros:
+        binary   : imagen binaria uint8 (0 ó 255).
+        color_bg : imagen RGB uint8 del mismo tamaño (thumbnail).
+        min_area : área mínima en píxeles² para considerar un contorno.
+
+    Retorna:
+        (imagen_con_contornos, número_de_objetos)
+    """
+    # findContours espera fondo=0, objeto=255
+    contours, _ = cv2.findContours(
+        binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    # Filtrar por área mínima → elimina ruido y artefactos pequeños
+    filtered = [c for c in contours if cv2.contourArea(c) >= min_area]
+
+    # Dibujar sobre copia de la imagen a color
+    canvas = color_bg.copy()
+
+    # Contornos en verde (grosor 2)
+    cv2.drawContours(canvas, filtered, -1, (0, 255, 0), 2)
+
+    # Bounding boxes en rojo + etiqueta numérica en amarillo
+    for i, c in enumerate(filtered):
+        x, y, w, h = cv2.boundingRect(c)
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), (255, 50, 50), 1)
+        label_y = max(y - 4, 12)
+        cv2.putText(
+            canvas, str(i + 1),
+            (x + 2, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1,
+            cv2.LINE_AA,
+        )
+
+    return canvas, len(filtered)
+
+
+# =====================================================================
 # Pipeline completo
 # =====================================================================
 def process(
@@ -162,10 +231,17 @@ def process(
     # 4) binarizar el thumbnail (la binarización HEREDA de la pixelación)
     binary, otsu_value = binarize_manual(thumb, outputs.binary_threshold)
 
+    # 5) detección de contornos sobre la binarizada → visión por computadora
+    contours_img, contour_count = detect_contours(
+        binary, thumb, outputs.min_contour_area,
+    )
+
     return ProcessResult(
         channels_modified=(ch_r, ch_g, ch_b),
         modified=modified,
         thumbnail=thumb,
         binary=binary,
         otsu_value=otsu_value,
+        contours_image=contours_img,
+        contour_count=contour_count,
     )

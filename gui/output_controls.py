@@ -70,6 +70,7 @@ class OutputControls(QFrame):
     pixelationChanged = Signal(int)
     thresholdChanged = Signal(int)
     autoThresholdRequested = Signal()
+    minAreaChanged = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,6 +78,7 @@ class OutputControls(QFrame):
 
         self.pix = _RangedSlider("Pixelación del thumbnail", 1, 32, 4)
         self.thr = _RangedSlider("Umbral de binarización (0–255)", 0, 255, 128)
+        self.area = _RangedSlider("Área mínima de contorno (px²)", 0, 500, 50)
 
         self.btn_auto = QPushButton("Auto (Otsu)")
         self.btn_auto.setToolTip("Calcula el umbral óptimo con Otsu "
@@ -85,6 +87,7 @@ class OutputControls(QFrame):
 
         self.pix.valueChanged.connect(self.pixelationChanged.emit)
         self.thr.valueChanged.connect(self.thresholdChanged.emit)
+        self.area.valueChanged.connect(self.minAreaChanged.emit)
 
         right = QHBoxLayout()
         right.addWidget(self.thr, 1)
@@ -93,8 +96,10 @@ class OutputControls(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.addWidget(self.pix, 1)
-        layout.addSpacing(20)
+        layout.addSpacing(12)
         layout.addLayout(right, 1)
+        layout.addSpacing(12)
+        layout.addWidget(self.area, 1)
 
     def set_threshold(self, v: int) -> None:
         self.thr.set_value(v)
@@ -104,3 +109,6 @@ class OutputControls(QFrame):
 
     def threshold(self) -> int:
         return self.thr.value()
+
+    def min_contour_area(self) -> int:
+        return self.area.value()

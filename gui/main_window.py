@@ -30,7 +30,7 @@ from core.image_io import load_image, save_image
 from core.histogram import histogram_uint8
 from core.pipeline import (
     process, ProcessResult, OutputParams,
-    binarize_manual, apply_channel_curves,
+    binarize_manual, apply_channel_curves, detect_contours,
 )
 from core.tone_curve import ChannelCurve, build_lut
 
@@ -143,18 +143,18 @@ class MainWindow(QMainWindow):
             self._blocks.append(b)
             grid.addWidget(b, 2, i)
             
-        # fila 3: resultado modificada + thumbnail + binarizada
+        # fila 3: resultado modificada + binarizada + contornos
         self.panel_modified = ImagePanel("Modificada", min_size=(300, 350))
-        grid.addWidget(self.panel_modified, 3, 0, 2, 1)  # rowspan=2, columna 0
-        
-        self.panel_thumb = ImagePanel("Thumbnail (pixelado)", min_size=(240, 260))
-        grid.addWidget(self.panel_thumb, 3, 1, 1, 1)
-        
+        grid.addWidget(self.panel_modified, 3, 0, 1, 1)
+
         self.panel_binary = ImagePanel("Binarizada", min_size=(240, 260))
-        grid.addWidget(self.panel_binary, 3, 2, 1, 1)
-        
+        grid.addWidget(self.panel_binary, 3, 1, 1, 1)
+
+        self.panel_contours = ImagePanel("Contornos detectados (0)", min_size=(240, 260))
+        grid.addWidget(self.panel_contours, 3, 2, 1, 1)
+
         self.output_controls = OutputControls()
-        grid.addWidget(self.output_controls, 4, 1, 1, 2)
+        grid.addWidget(self.output_controls, 4, 0, 1, 3)
         
         # ========== STRETCHES ==========
         grid.setRowStretch(0, 3)
@@ -187,6 +187,7 @@ class MainWindow(QMainWindow):
         oc = self.output_controls
         oc.pixelationChanged.connect(lambda _: self._preview_timer.start())
         oc.thresholdChanged.connect(lambda _: self._preview_timer.start())
+        oc.minAreaChanged.connect(lambda _: self._preview_timer.start())
         oc.autoThresholdRequested.connect(self._on_auto_otsu)
 
     # ---------- handlers ----------
@@ -259,6 +260,7 @@ class MainWindow(QMainWindow):
         return OutputParams(
             pixelation=self.output_controls.pixelation(),
             binary_threshold=self.output_controls.threshold(),
+            min_contour_area=self.output_controls.min_contour_area(),
         )
 
     def _compute(self) -> ProcessResult:
@@ -291,5 +293,8 @@ class MainWindow(QMainWindow):
 
         # resultados finales
         self.panel_modified.set_image(result.modified)
-        self.panel_thumb.set_image(result.thumbnail)
         self.panel_binary.set_image(result.binary)
+        self.panel_contours.set_image(result.contours_image)
+        self.panel_contours.set_title(
+            f"Contornos detectados ({result.contour_count})"
+        )
