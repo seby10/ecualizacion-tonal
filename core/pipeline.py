@@ -1,19 +1,6 @@
 """
-Pipeline de procesamiento.
-
-Orden de procesamiento (importante didácticamente):
-    original
-        → aplicar LUT por canal           (apply_channel_curves)
-        → recomponer imagen modificada    (np.stack)
-        → reducir a thumbnail pixelado    (pixelated_thumbnail)
-        → binarizar el thumbnail          (binarize_manual)
-
-La binarización SIEMPRE se calcula sobre el thumbnail. Por tanto:
-  * cambiar la pixelación   → cambia thumbnail Y binarizada.
-  * cambiar el umbral       → cambia solo la binarizada.
-
-Operaciones de redistribución (LUT) y binarización están implementadas
-manualmente; ver core.redistribution.
+Pipeline de procesamiento principal.
+Orden: original → LUT → modificada → thumbnail → binarizada.
 """
 from dataclasses import dataclass
 import cv2
@@ -38,19 +25,13 @@ class ProcessResult:
     otsu_value: int
 
 
-# =====================================================================
-# Aplicación de la LUT a un canal:  out[y,x] = lut[ in[y,x] ]
-# =====================================================================
-# Reemplaza cv2.LUT — el indexado avanzado de NumPy es la operación
-# fundamental (no hay redistribución oculta).
+# Aplicación manual de LUT a un canal usando indexado de NumPy
 
 def apply_lut(channel: np.ndarray, lut: np.ndarray) -> np.ndarray:
     return lut[channel]
 
 
-# =====================================================================
 # Aplicar las tres curvas y devolver canales separados
-# =====================================================================
 def apply_channel_curves(
     rgb: np.ndarray,
     r: ChannelCurve, g: ChannelCurve, b: ChannelCurve,
@@ -64,9 +45,7 @@ def apply_channel_curves(
     return ch_r, ch_g, ch_b
 
 
-# =====================================================================
-# Conversión a luminancia BT.601 (sin cv2.cvtColor) — manual
-# =====================================================================
+# Conversión a luminancia BT.601 manual
 def to_grayscale_bt601(rgb: np.ndarray) -> np.ndarray:
     r = rgb[..., 0].astype(np.float32)
     g = rgb[..., 1].astype(np.float32)
@@ -75,16 +54,9 @@ def to_grayscale_bt601(rgb: np.ndarray) -> np.ndarray:
     return np.clip(np.round(y), 0, 255).astype(np.uint8)
 
 
-# =====================================================================
-# Binarización manual:
-#   automática (Otsu)  ó  manual con umbral fijo.
-# =====================================================================
+# Binarización y cálculo de umbral (Otsu)
 def _otsu_threshold(gray: np.ndarray) -> int:
-    """
-    Implementación manual del algoritmo de Otsu:
-    busca el umbral t ∈ [0, 255] que minimiza la varianza intra-clase
-    (equivalente a maximizar la varianza inter-clase).
-    """
+    """Implementación manual del algoritmo de Otsu."""
     hist = np.bincount(gray.ravel(), minlength=256).astype(np.float64)
     total = float(gray.size)
     if total <= 0:
@@ -115,19 +87,14 @@ def _otsu_threshold(gray: np.ndarray) -> int:
 
 
 def binarize_manual(rgb: np.ndarray, threshold: int | None) -> tuple[np.ndarray, int]:
-    """
-    Binariza una imagen RGB usando luminancia BT.601 + umbral.
-    Si threshold es None se usa Otsu (manual).
-    """
+    """Binariza una imagen RGB (BT.601 + umbral Otsu o fijo)."""
     gray = to_grayscale_bt601(rgb)
     t = _otsu_threshold(gray) if threshold is None else int(np.clip(threshold, 0, 255))
     binary = np.where(gray >= t, np.uint8(255), np.uint8(0))
     return binary, t
 
 
-# =====================================================================
-# Thumbnail pixelado (downsample por bloques + upsample nearest)
-# =====================================================================
+# Thumbnail pixelado
 def pixelated_thumbnail(rgb: np.ndarray, factor: int, display_side: int) -> np.ndarray:
     factor = max(1, int(factor))
     h, w = rgb.shape[:2]
@@ -142,24 +109,15 @@ def pixelated_thumbnail(rgb: np.ndarray, factor: int, display_side: int) -> np.n
     return cv2.resize(small, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
 
 
-# =====================================================================
 # Pipeline completo
-# =====================================================================
 def process(
     rgb: np.ndarray,
     r: ChannelCurve, g: ChannelCurve, b: ChannelCurve,
     outputs: OutputParams,
 ) -> ProcessResult:
-    # 1) aplicar curvas tonales por canal (LUT manual)
     ch_r, ch_g, ch_b = apply_channel_curves(rgb, r, g, b)
-
-    # 2) recomponer la imagen modificada
     modified = np.stack([ch_r, ch_g, ch_b], axis=-1)
-
-    # 3) thumbnail pixelado a partir de la modificada
     thumb = pixelated_thumbnail(modified, outputs.pixelation, outputs.thumb_display_side)
-
-    # 4) binarizar el thumbnail (la binarización HEREDA de la pixelación)
     binary, otsu_value = binarize_manual(thumb, outputs.binary_threshold)
 
     return ProcessResult(

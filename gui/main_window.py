@@ -1,19 +1,6 @@
 """
-Ventana principal — modelo simplificado.
-
-Una sola técnica de redistribución por canal: contrast stretching lineal.
-Cada canal expone un slider max_in ∈ [1, 255]:
-    255 = identidad (sin cambios)
-    <255 = estiramiento (aumenta el brillo)
-
-La operación es monótona y satura información fuera del rango útil,
-redistribuyendo intensidades para usar todo el espectro dinámico [0, 255].
-Útil como preprocesamiento previo a la binarización (separa mejor objeto/fondo).
-
-Pipeline: original → curvas → modificada → thumbnail (pixelado) → binarizada.
-La binarizada SIEMPRE se calcula sobre el thumbnail.
-
-Las imágenes de canal se muestran en escala de grises (matrices 2D).
+Ventana principal de Ecualización Tonal (Contrast Stretching).
+Pipeline: original → curvas → modificada → thumbnail → binarizada.
 """
 from pathlib import Path
 
@@ -123,7 +110,7 @@ class MainWindow(QMainWindow):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
-        # fila 0: imagen original
+        # Fila 0: imagen original
         self.panel_original = ImagePanel("Imagen original", min_size=(420, 400))
         self.panel_original.setMaximumWidth(980)
         self.panel_original.setMaximumHeight(560)
@@ -136,21 +123,21 @@ class MainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignHCenter,
         )
 
-        # fila 1: canales en escala de grises
+        # Fila 1: canales en escala de grises
         self._channel_panels: list[ImagePanel] = []
         for i, name in enumerate(CHANNEL_NAMES):
             p = ImagePanel(f"Canal {name}", min_size=(220, 260))
             self._channel_panels.append(p)
             grid.addWidget(p, 1, i)
 
-        # fila 2: curvas + sliders min/max
+        # Fila 2: curvas + sliders min/max
         self._blocks: list[_ChannelBlock] = []
         for i, (name, color) in enumerate(zip(CHANNEL_NAMES, CHANNEL_COLORS)):
             b = _ChannelBlock(name, color)
             self._blocks.append(b)
             grid.addWidget(b, 2, i)
             
-        # fila 3: resultado modificada + thumbnail + binarizada
+        # Fila 3: resultado modificada + thumbnail + binarizada
         self.panel_modified = ImagePanel("Modificada", min_size=(300, 350))
         grid.addWidget(self.panel_modified, 3, 0, 2, 1)  # rowspan=2, columna 0
         
@@ -314,7 +301,7 @@ class MainWindow(QMainWindow):
                 block.curve.set_histogram(np.zeros(256, dtype=np.int64))
             return
 
-        # LUT por canal — depende del histograma del canal ORIGINAL
+        # LUT por canal (depende del histograma)
         for i, (block, c) in enumerate(zip(self._blocks, curves)):
             block.curve.set_lut(build_lut(c, self._original[..., i]))
 
