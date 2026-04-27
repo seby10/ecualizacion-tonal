@@ -1,21 +1,18 @@
 """
-Control de un canal: un único slider de fuerza de ecualización.
+Control de un canal: un único slider para max_in.
 
-    s = 0.0 → identidad (sin cambios)
-    s = 1.0 → ecualización completa
-    intermedio → blend lineal con la identidad
+    max_in = 255 → identidad (sin cambios)
+    max_in < 255 → estiramiento (aumenta el brillo)
 
-LUT correspondiente: lut_equalize(channel, s) — ver core.redistribution.
+LUT correspondiente: lut_stretch(0, max_in) — ver core.redistribution.
 """
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton
 
 
 class ChannelSlider(QWidget):
-    """Slider [0, 1] con etiqueta, valor y botón de reset al máximo."""
-    valueChanged = Signal(float)
-
-    _STEPS = 100  # resolución interna: 0..100 → 0.00..1.00
+    """Slider [1, 255] con etiqueta, valor y botón de reset al máximo."""
+    valueChanged = Signal(int)
 
     def __init__(self, channel_name: str, color: str, parent=None):
         super().__init__(parent)
@@ -29,23 +26,23 @@ class ChannelSlider(QWidget):
         title.setStyleSheet(f"color: {color};")
 
         self._slider = QSlider(Qt.Orientation.Horizontal)
-        self._slider.setRange(0, self._STEPS)
-        self._slider.setValue(self._STEPS)  # default: ecualización completa
+        self._slider.setRange(1, 255)
+        self._slider.setValue(255)  # default: identidad
         self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._slider.setTickInterval(self._STEPS // 4)
+        self._slider.setTickInterval(32)
         self._slider.valueChanged.connect(self._on_change)
 
-        self._value_label = QLabel("1.00")
-        self._value_label.setMinimumWidth(45)
+        self._value_label = QLabel("255")
+        self._value_label.setMinimumWidth(35)
         self._value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         reset_btn = QPushButton("↺")
         reset_btn.setFixedWidth(28)
-        reset_btn.setToolTip("Volver a ecualización completa (1.00)")
+        reset_btn.setToolTip("Volver a la normalidad (255)")
         reset_btn.clicked.connect(self.reset)
 
-        min_label = QLabel("0.00")
-        max_label = QLabel("1.00")
+        min_label = QLabel("1")
+        max_label = QLabel("255")
         for lbl in (min_label, max_label):
             lbl.setStyleSheet("color: #888;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -64,12 +61,12 @@ class ChannelSlider(QWidget):
 
     def _on_change(self, raw: int) -> None:
         v = self.value()
-        self._value_label.setText(f"{v:.2f}")
+        self._value_label.setText(str(v))
         self.valueChanged.emit(v)
 
-    def value(self) -> float:
-        """Devuelve la fuerza de ecualización en [0, 1]."""
-        return self._slider.value() / self._STEPS
+    def value(self) -> int:
+        """Devuelve el max_in en [1, 255]."""
+        return self._slider.value()
 
     def reset(self) -> None:
-        self._slider.setValue(self._STEPS)
+        self._slider.setValue(255)

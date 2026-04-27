@@ -1,15 +1,14 @@
 """
 Ventana principal — modelo simplificado.
 
-Una sola técnica de redistribución por canal: ecualización de histograma
-(Gonzalez & Woods §3.3). Cada canal expone un slider strength ∈ [0, 1]:
-    0 = identidad (sin cambios)
-    1 = ecualización completa
-    intermedio = blend lineal con la identidad
+Una sola técnica de redistribución por canal: contrast stretching lineal.
+Cada canal expone un slider max_in ∈ [1, 255]:
+    255 = identidad (sin cambios)
+    <255 = estiramiento (aumenta el brillo)
 
-Sin clipping: la operación es monótona y NO tira información — solo
-redistribuye intensidades para aplanar el histograma. Útil como
-preprocesamiento previo a la binarización (separa mejor objeto/fondo).
+La operación es monótona y satura información fuera del rango útil,
+redistribuyendo intensidades para usar todo el espectro dinámico [0, 255].
+Útil como preprocesamiento previo a la binarización (separa mejor objeto/fondo).
 
 Pipeline: original → curvas → modificada → thumbnail (pixelado) → binarizada.
 La binarizada SIEMPRE se calcula sobre el thumbnail.
@@ -66,7 +65,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ecualización Tonal por Canales — Histogram Equalization")
+        self.setWindowTitle("Ecualización Tonal por Canales — Contrast Stretching")
         self.resize(1280, 720)
         self.showMaximized()
 
@@ -85,7 +84,7 @@ class MainWindow(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(
-            "Abre una imagen. Slider [0, 1]: 0 = identidad, 1 = ecualización completa."
+            "Abre una imagen. Slider define el 'max_in' para hacer contrast stretching. Min es siempre 0."
         )
 
     # ---------- toolbar ----------
@@ -181,7 +180,7 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         for i, block in enumerate(self._blocks):
             block.slider.valueChanged.connect(
-                lambda v, idx=i: self._on_strength_change(idx, v)
+                lambda v, idx=i: self._on_slider_change(idx, v)
             )
 
         oc = self.output_controls
@@ -190,8 +189,8 @@ class MainWindow(QMainWindow):
         oc.autoThresholdRequested.connect(self._on_auto_otsu)
 
     # ---------- handlers ----------
-    def _on_strength_change(self, idx: int, v: float) -> None:
-        self._curves[idx].strength = v
+    def _on_slider_change(self, idx: int, v: int) -> None:
+        self._curves[idx].max_in = v
         self._preview_timer.start()
 
     # ---------- acciones de archivo ----------
@@ -233,7 +232,7 @@ class MainWindow(QMainWindow):
     def _on_reset_all(self) -> None:
         for i, block in enumerate(self._blocks):
             block.slider.reset()
-            self._curves[i].strength = 1.0
+            self._curves[i].max_in = 255
         self._preview_timer.start()
 
     def _on_auto_otsu(self) -> None:
