@@ -101,6 +101,14 @@ class MainWindow(QMainWindow):
         act_save.triggered.connect(self._on_save)
         tb.addAction(act_save)
 
+        act_save_thumb = QAction("Guardar pixelada", self)
+        act_save_thumb.triggered.connect(self._on_save_thumb)
+        tb.addAction(act_save_thumb)
+
+        act_save_binary = QAction("Guardar binarizada", self)
+        act_save_binary.triggered.connect(self._on_save_binary)
+        tb.addAction(act_save_binary)
+
         tb.addSeparator()
 
         act_reset = QAction("Reset todo", self)
@@ -228,6 +236,38 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Guardado: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Error al guardar", str(e))
+
+    def _on_save_thumb(self) -> None:
+        if self._original is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Guardar imagen pixelada (thumbnail)", "",
+            "PNG (*.png);;JPEG (*.jpg *.jpeg)",
+        )
+        if not path:
+            return
+        try:
+            result = self._compute()
+            save_image(path, result.thumbnail)
+            self.statusBar().showMessage(f"Guardado pixelado: {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error al guardar pixelado", str(e))
+
+    def _on_save_binary(self) -> None:
+        if self._original is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Guardar imagen binarizada", "",
+            "PNG (*.png);;JPEG (*.jpg *.jpeg)",
+        )
+        if not path:
+            return
+        try:
+            result = self._compute()
+            save_image(path, result.binary)
+            self.statusBar().showMessage(f"Guardado binarizado: {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error al guardar binarizado", str(e))
 
     def _on_reset_all(self) -> None:
         for i, block in enumerate(self._blocks):
