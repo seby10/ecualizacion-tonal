@@ -6,6 +6,8 @@ Con mala iluminación o bajo contraste, segmentar directamente falla. La aplicac
 
 Proyecto de Inteligencia Artificial · Universidad Técnica de Ambato
 
+![Imagen original muy oscura arriba y sus tres canales con el contraste estirado debajo](docs/captura.png)
+
 ## Cómo funciona
 
 La imagen pasa por cinco etapas:
